@@ -1,0 +1,104 @@
+#!/bin/bash
+
+# --- Script de Automatización de Hosting para Alvaro Jumbo ---
+
+# 1. Solicitar datos al administrador
+echo "--- NUEVO CLIENTE DE HOSTING ---"
+read -p "Introduce el nombre del nuevo usuario (ej. cliente1): " USUARIO
+read -sp "Introduce la contraseña para este usuario: " PASSWORD
+echo ""
+
+# 2. Crear usuario del sistema y directorios (Puntos 1 y 2 de tus notas)
+# -m crea el home, -s define la shell
+if id "$USUARIO" &>/dev/null; then
+    echo "¡Error! El usuario ya existe."
+    exit 1
+fi
+
+useradd -m -d /home/$USUARIO -s /bin/bash $USUARIO
+echo "$USUARIO:$PASSWORD" | chpasswd
+
+# Crear la estructura de carpetas: /home/usuario/site
+mkdir -p /home/$USUARIO/site
+
+# Ajustar permisos para que Nginx y FTP funcionen
+# Damos propiedad al usuario, pero permitimos que el grupo www-data lea
+chown -R $USUARIO:$USUARIO /home/$USUARIO
+chmod 755 /home/$USUARIO
+
+# 3. Crear Base de Datos y Usuario MySQL (Punto 6 de tus notas)
+DB_NAME="${USUARIO}_db"
+echo "Creando base de datos: $DB_NAME..."
+
+sudo mysql -e "CREATE DATABASE ${DB_NAME};"
+sudo mysql -e "CREATE USER '${USUARIO}'@'localhost' IDENTIFIED BY '${PASSWORD}';"
+sudo mysql -e "GRANT ALL PRIVILEGES ON ${DB_NAME}.* TO '${USUARIO}'@'localhost';"
+sudo mysql -e "FLUSH PRIVILEGES;"
+
+# 4. Crear la página de bienvenida Dinámica (Punto 3 y restricciones)
+# Aquí insertamos el mensaje personalizado de Alvaro Jumbo
+FILE="/home/$USUARIO/site/index.php"
+
+cat <<EOF > $FILE
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Bienvenido</title>
+    <style>
+        body { font-family: sans-serif; text-align: center; padding: 50px; background-color: #f4f4f4; }
+        .card { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 0 10px rgba(0,0,0,0.1); display: inline-block; }
+        h1 { color: #2c3e50; }
+        ul { text-align: left; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>Bienvenido al hosting de Alvaro Jumbo</h1>
+        <p>Tu cuenta ha sido creada exitosamente.</p>
+        <hr>
+        <h3>Tus Datos:</h3>
+        <ul>
+            <li><strong>Usuario:</strong> $USUARIO</li>
+            <li><strong>Contraseña:</strong> $PASSWORD</li>
+            <li><strong>Sitio Web:</strong> http://$USUARIO.com</li>
+            <li><strong>Base de Datos:</strong> $DB_NAME</li>
+        </ul>
+        <p><em>Instrucciones adicionales: Puedes subir tus archivos vía FTP o usar phpMyAdmin con estas credenciales.</em></p>
+    </div>
+</body>
+</html>
+EOF
+
+# Asegurar que el usuario sea dueño del archivo index.php
+chown $USUARIO:$USUARIO $FILE
+
+# 5. Configurar Nginx (Virtual Host)
+CONFIG="/etc/nginx/sites-available/$USUARIO.com"
+
+cat <<EOF > $CONFIG
+server {
+    listen 80;
+    server_name $USUARIO.com;
+    root /home/$USUARIO/site;
+    index index.php index.html;
+
+    location / {
+        try_files \$uri \$uri/ =404;
+    }
+
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php8.3-fpm.sock;
+    }
+}
+EOF
+
+# Activar el sitio y recargar Nginx
+ln -s $CONFIG /etc/nginx/sites-enabled/
+systemctl reload nginx
+
+echo ""
+echo "--- PROCESO COMPLETADO ---"
+echo "El cliente $USUARIO ha sido configurado."
+echo "URL local de prueba: http://$USUARIO.com"
+echo "Recuerda añadir '$USUARIO.com' a tu archivo /etc/hosts para probarlo localmente."
